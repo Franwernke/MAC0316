@@ -1,13 +1,13 @@
 #lang plai-typed
-
-; Aluno: Francisco Eugênio Wernke
-; NUSP: 11221870
+; este interpretador aumenta o closureTyped para incluir
+; cons, car, cdr, valor nulo (descrito como  ())
+; e display
+; display imprime o valor passado seguido de um ";". Nao mudamos de linha 
 
 ; Basic expressions
 (define-type ExprC
   [numC  (n : number)]
   [idC   (s : symbol)]
-  [quoteC (s : symbol)]
   [plusC (l : ExprC) (r : ExprC)]
   [multC (l : ExprC) (r : ExprC)]
   [lamC  (arg : symbol) (body : ExprC)]
@@ -16,7 +16,12 @@
   [seqC  (e1 : ExprC) (e2 : ExprC)]
   [setC  (var : symbol) (arg : ExprC)]
   [letC  (name : symbol) (arg : ExprC) (body : ExprC)]
-  [let*C (name1 : symbol) (arg1 : ExprC) (name2 : symbol) (arg2 : ExprC) (body : ExprC)]
+  [consC (car : ExprC) (cdr : ExprC)]
+  [carC  (cell : ExprC) ]
+  [cdrC (cell : ExprC)]
+  [displayC (exp : ExprC)]
+  [quoteC  (sym : symbol)]
+  [nullC  ]
   )
 
 
@@ -24,7 +29,6 @@
 (define-type ExprS
   [numS    (n : number)]
   [idS     (s : symbol)]
-  [quoteS  (s : symbol)]
   [lamS    (arg : symbol) (body : ExprS)]
   [appS    (fun : ExprS) (arg : ExprS)]
   [plusS   (l : ExprS) (r : ExprS)]
@@ -35,9 +39,13 @@
   [seqS    (e1 : ExprS) (e2 : ExprS)]
   [setS    (var : symbol) (arg : ExprS)]
   [letS    (name : symbol) (arg : ExprS) (body : ExprS)]
-  [let*S   (name1 : symbol) (arg1 : ExprS) (name2 : symbol) (arg2 : ExprS) (body : ExprS)]
-  [letrecS (name : symbol) (arg : ExprS) (body : ExprS)]
-  )
+  [consS (car : ExprS) (cdr : ExprS)]
+  [carS (cell : ExprS) ]
+  [cdrS (cell : ExprS)]
+  [displayS (exp : ExprS)]
+  [quoteS  (sym : symbol)]
+  [nullS ]
+ )
 
 
 ; Removing the sugar
@@ -45,7 +53,6 @@
   (type-case ExprS as
     [numS    (n)        (numC n)]
     [idS     (s)        (idC s)]
-    [quoteS  (s)        (quoteC s)]
     [lamS    (a b)      (lamC a (desugar b))]
     [appS    (fun arg)  (appC (desugar fun) (desugar arg))]
     [plusS   (l r)      (plusC (desugar l) (desugar r))]
@@ -56,20 +63,22 @@
     [seqS    (e1 e2)    (seqC (desugar e1) (desugar e2))]
     [setS    (var expr) (setC  var (desugar expr))]
     [letS    (n a b)    (letC n (desugar a) (desugar b))]
-    [let*S   (name1 arg1 name2 arg2 body) (let*C name1 (desugar arg1) name2 (desugar arg2) (desugar body))]
-    [letrecS (name arg body) (letC name (numC 0)
-                                    (seqC
-                                        (setC name (desugar arg))
-                                        (desugar body)
-                                     ))]
+    [consS   (car cdr) (consC (desugar car) (desugar cdr))]
+    [carS    (exp)     (carC (desugar  exp)) ]
+    [cdrS    (exp)     (cdrC (desugar  exp)) ]
+    [displayS (exp)    (displayC (desugar exp))]
+    [quoteS (sym) (quoteC sym)]
+    [nullS  () (nullC)]
     ))
 
 
 ; We need a new value for the box
 (define-type Value
   [numV  (n : number)]
+  [nullV ]
+  [quoteV (symb : symbol)]
   [closV (arg : symbol) (body : ExprC) (env : Env)]
-  [symV  (string : symbol)]
+  [cellV (first : Value) (second : Value)]
   )
 
 
@@ -117,9 +126,6 @@
     ; IDs are retrieved from the Env and unboxed
     [idC (n) (unbox (lookup n env))]
 
-    ; Quote evaluates the expression to a string
-    [quoteC (s) (symV s)]
-    
     ; Lambdas evaluate to closures, which save the environment
     [lamC (a b) (closV a b env)]
 
@@ -153,15 +159,21 @@
           (let* ([new-bind (bind name (box (interp arg env)))]
                  [new-env (extend-env new-bind env)])
             (interp body new-env))]
-
-    ; let*
-    [let*C (name1 arg1 name2 arg2 body)
-           (let* ([new-bind1 (bind name1 (box (interp arg1 env)))]
-                  [new-env1  (extend-env new-bind1 env)]
-                  [new-bind2 (bind name2 (box (interp arg2 new-env1)))]
-                  [new-env2  (extend-env new-bind2 new-env1)]
-                  )
-             (interp body new-env2))]
+    ; Cell operations
+    [consC (car cdr)
+           (cellV (interp car env) (interp cdr env))]
+    [carC  (exp) (cellV-first (interp exp env))]
+    [cdrC  (exp) (cellV-second (interp exp env))]
+    ;Display values
+    [displayC (exp) (let ((value (interp exp env)))
+                      (begin (print-value (interp exp env))
+                             (display ";") ; no newline in plai-typed, we use ";" 
+                             value))]
+    ;Symbol
+    [quoteC (sym) (quoteV sym)]
+    ;Null
+    [nullC  () (nullV)]
+    
     ))
 
 
@@ -172,33 +184,76 @@
     [(s-exp-symbol? s) (idS (s-exp->symbol s))]
     [(s-exp-list? s)
      (let ([sl (s-exp->list s)])
-       (case (s-exp->symbol (first sl))
-         [(+) (plusS (parse (second sl)) (parse (third sl)))]
-         [(*) (multS (parse (second sl)) (parse (third sl)))]
-         [(-) (bminusS (parse (second sl)) (parse (third sl)))]
-         [(~) (uminusS (parse (second sl)))]
-         [(quote) (quoteS (s-exp->symbol (second sl)))]
-         [(lambda) (lamS (s-exp->symbol (second sl)) (parse (third sl)))] ; definição
-         [(call) (appS (parse (second sl)) (parse (third sl)))]
-         [(if) (ifS (parse (second sl)) (parse (third sl)) (parse (fourth sl)))]
-         [(seq) (seqS (parse (second sl)) (parse (third sl)))]
-         [(:=) (setS (s-exp->symbol (second sl)) (parse (third sl)))]
-         [(let) (letS (s-exp->symbol (first (s-exp->list (first (s-exp->list (second sl))))))
-                      (parse (second (s-exp->list (first (s-exp->list (second sl))))))
-                      (parse (third sl)))]
-         [(let*) (let*S (s-exp->symbol (first (s-exp->list (first (s-exp->list (second sl))))))
-                        (parse (second (s-exp->list (first (s-exp->list (second sl))))))
-                        (s-exp->symbol (first (s-exp->list (second (s-exp->list (second sl))))))
-                        (parse (second (s-exp->list (second (s-exp->list (second sl))))))
-                        (parse (third sl))
-                        )]
-         [(letrec) (letrecS (s-exp->symbol (first (s-exp->list (first (s-exp->list (second sl))))))
-                      (parse (second (s-exp->list (first (s-exp->list (second sl))))))
-                      (parse (third sl)))]
-         [(load) (parse (read))]
-         [else (error 'parse "invalid list input")]))]
+       (if (empty? sl)
+           (nullS)
+           (case (s-exp->symbol (first sl))
+             [(+) (plusS (parse (second sl)) (parse (third sl)))]
+             [(*) (multS (parse (second sl)) (parse (third sl)))]
+             [(-) (bminusS (parse (second sl)) (parse (third sl)))]
+             [(~) (uminusS (parse (second sl)))]
+             [(lambda) (lamS (s-exp->symbol (second sl)) (parse (third sl)))] ; definição
+             [(call) (appS (parse (second sl)) (parse (third sl)))]
+             [(if) (ifS (parse (second sl)) (parse (third sl)) (parse (fourth sl)))]
+             [(seq) (seqS (parse (second sl)) (parse (third sl)))]
+             [(:=) (setS (s-exp->symbol (second sl)) (parse (third sl)))]
+             [(let) (letS (s-exp->symbol (first (s-exp->list (first (s-exp->list (second sl))))))
+                          (parse (second (s-exp->list (first (s-exp->list (second sl))))))
+                          (parse (third sl)))]
+             [(cons) (consS (parse (second sl)) (parse (third sl)))]
+             [(car) (carS (parse (second sl)))]
+             [(cdr) (cdrS (parse (second sl)))]
+             [(display)(displayS (parse (second sl)))]
+             [(quote) (quoteS (s-exp->symbol (second sl)))]
+             [else (error 'parse "invalid list input")])))]
     [else (error 'parse "invalid input")]))
 
 
 ; Facilitator
 (define (interpS [s : s-expression]) (interp (desugar (parse s)) mt-env))
+
+; Printing
+(define (print-value [value : Value ] ) : void
+                      
+                      (type-case Value value
+                        [numV  (n) (display n)]
+                        [quoteV (symb) (display symb)]
+                        [closV (arg body env)
+                               (begin (display "<<")
+                                      (display "lambda(")
+                                      (display arg)
+                                      (display ")")
+                                      (display body)
+                                      (display ";")
+                                      (display env)
+                                      (display ">>"))]
+                        
+                        [cellV (first second)
+                               (begin (display "(")
+                                      (print-list value)
+                                      (display ")")
+                                      )
+                               ]
+                        [nullV ()
+                               (display '())]))
+(define (print-list cell) : void
+  (begin 
+         (print-value (cellV-first cell))
+         (display " ")
+         (let ([rest (cellV-second cell)])
+           (type-case Value rest 
+             [nullV () (display "") ]; null at the end of the list is not printed
+             [cellV (first second) (print-list rest)]
+             [else (begin (display ".")
+                        (print-value (cellV-second cell)))]))
+         )
+  )
+
+; Exemplos
+
+;Esta cria uma funcao recursiva fun e imprime o valor do parametro a cada chamada.
+ (interpS '(let ((fun ()))
+              (seq (:= fun (lambda x (if x (seq (display x)
+                                                (call fun (- x 1)))
+                                         x)))
+                   (call fun 8))))
+                      

@@ -1,13 +1,10 @@
 #lang plai-typed
 
-; Aluno: Francisco Eugênio Wernke
-; NUSP: 11221870
 
 ; Basic expressions
 (define-type ExprC
   [numC  (n : number)]
   [idC   (s : symbol)]
-  [quoteC (s : symbol)]
   [plusC (l : ExprC) (r : ExprC)]
   [multC (l : ExprC) (r : ExprC)]
   [lamC  (arg : symbol) (body : ExprC)]
@@ -16,7 +13,6 @@
   [seqC  (e1 : ExprC) (e2 : ExprC)]
   [setC  (var : symbol) (arg : ExprC)]
   [letC  (name : symbol) (arg : ExprC) (body : ExprC)]
-  [let*C (name1 : symbol) (arg1 : ExprC) (name2 : symbol) (arg2 : ExprC) (body : ExprC)]
   )
 
 
@@ -24,7 +20,6 @@
 (define-type ExprS
   [numS    (n : number)]
   [idS     (s : symbol)]
-  [quoteS  (s : symbol)]
   [lamS    (arg : symbol) (body : ExprS)]
   [appS    (fun : ExprS) (arg : ExprS)]
   [plusS   (l : ExprS) (r : ExprS)]
@@ -35,8 +30,6 @@
   [seqS    (e1 : ExprS) (e2 : ExprS)]
   [setS    (var : symbol) (arg : ExprS)]
   [letS    (name : symbol) (arg : ExprS) (body : ExprS)]
-  [let*S   (name1 : symbol) (arg1 : ExprS) (name2 : symbol) (arg2 : ExprS) (body : ExprS)]
-  [letrecS (name : symbol) (arg : ExprS) (body : ExprS)]
   )
 
 
@@ -45,7 +38,6 @@
   (type-case ExprS as
     [numS    (n)        (numC n)]
     [idS     (s)        (idC s)]
-    [quoteS  (s)        (quoteC s)]
     [lamS    (a b)      (lamC a (desugar b))]
     [appS    (fun arg)  (appC (desugar fun) (desugar arg))]
     [plusS   (l r)      (plusC (desugar l) (desugar r))]
@@ -56,12 +48,6 @@
     [seqS    (e1 e2)    (seqC (desugar e1) (desugar e2))]
     [setS    (var expr) (setC  var (desugar expr))]
     [letS    (n a b)    (letC n (desugar a) (desugar b))]
-    [let*S   (name1 arg1 name2 arg2 body) (let*C name1 (desugar arg1) name2 (desugar arg2) (desugar body))]
-    [letrecS (name arg body) (letC name (numC 0)
-                                    (seqC
-                                        (setC name (desugar arg))
-                                        (desugar body)
-                                     ))]
     ))
 
 
@@ -69,7 +55,6 @@
 (define-type Value
   [numV  (n : number)]
   [closV (arg : symbol) (body : ExprC) (env : Env)]
-  [symV  (string : symbol)]
   )
 
 
@@ -117,9 +102,6 @@
     ; IDs are retrieved from the Env and unboxed
     [idC (n) (unbox (lookup n env))]
 
-    ; Quote evaluates the expression to a string
-    [quoteC (s) (symV s)]
-    
     ; Lambdas evaluate to closures, which save the environment
     [lamC (a b) (closV a b env)]
 
@@ -153,15 +135,6 @@
           (let* ([new-bind (bind name (box (interp arg env)))]
                  [new-env (extend-env new-bind env)])
             (interp body new-env))]
-
-    ; let*
-    [let*C (name1 arg1 name2 arg2 body)
-           (let* ([new-bind1 (bind name1 (box (interp arg1 env)))]
-                  [new-env1  (extend-env new-bind1 env)]
-                  [new-bind2 (bind name2 (box (interp arg2 new-env1)))]
-                  [new-env2  (extend-env new-bind2 new-env1)]
-                  )
-             (interp body new-env2))]
     ))
 
 
@@ -177,7 +150,6 @@
          [(*) (multS (parse (second sl)) (parse (third sl)))]
          [(-) (bminusS (parse (second sl)) (parse (third sl)))]
          [(~) (uminusS (parse (second sl)))]
-         [(quote) (quoteS (s-exp->symbol (second sl)))]
          [(lambda) (lamS (s-exp->symbol (second sl)) (parse (third sl)))] ; definição
          [(call) (appS (parse (second sl)) (parse (third sl)))]
          [(if) (ifS (parse (second sl)) (parse (third sl)) (parse (fourth sl)))]
@@ -186,16 +158,6 @@
          [(let) (letS (s-exp->symbol (first (s-exp->list (first (s-exp->list (second sl))))))
                       (parse (second (s-exp->list (first (s-exp->list (second sl))))))
                       (parse (third sl)))]
-         [(let*) (let*S (s-exp->symbol (first (s-exp->list (first (s-exp->list (second sl))))))
-                        (parse (second (s-exp->list (first (s-exp->list (second sl))))))
-                        (s-exp->symbol (first (s-exp->list (second (s-exp->list (second sl))))))
-                        (parse (second (s-exp->list (second (s-exp->list (second sl))))))
-                        (parse (third sl))
-                        )]
-         [(letrec) (letrecS (s-exp->symbol (first (s-exp->list (first (s-exp->list (second sl))))))
-                      (parse (second (s-exp->list (first (s-exp->list (second sl))))))
-                      (parse (third sl)))]
-         [(load) (parse (read))]
          [else (error 'parse "invalid list input")]))]
     [else (error 'parse "invalid input")]))
 
